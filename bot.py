@@ -1,105 +1,50 @@
-import os
-
+# bot.py
 import discord
 from discord.ext import commands
-from dotenv import load_dotenv
+import asyncio
+import logging
+import os
+from config import load_config
 
-from config import PREFIX
-from cogs.verification import Verification
-from cogs.version_checker import VersionChecker
+# Set up logging
+logging.basicConfig(level=logging.INFO)
 
+# Load config
+config = load_config()
 
-load_dotenv()
-
-TOKEN = os.getenv("DISCORD_TOKEN")
+# Get token from config or environment
+TOKEN = config.get("TOKEN") or os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN is missing from .env")
+    raise ValueError("No token found in config or environment variables!")
 
-
+# Initialize bot
 intents = discord.Intents.default()
-intents.members = True
+intents.message_content = True
 
-
-class VerificationBot(commands.Bot):
-
-    def __init__(self):
-        super().__init__(
-            command_prefix=PREFIX,
-            intents=intents,
-            help_command=None
-        )
-
-    async def setup_hook(self):
-
-        await self.add_cog(
-            Verification(self)
-        )
-
-        await self.add_cog(
-            VersionChecker(self)
-        )
-
-        synced = await self.tree.sync()
-
-        print(
-            f"Synced {len(synced)} slash command(s)."
-        )
-
-
-bot = VerificationBot()
-
+bot = commands.Bot(
+    command_prefix=config.get("PREFIX", "!"),
+    intents=intents
+)
 
 @bot.event
 async def on_ready():
+    print(f'{bot.user} has connected to Discord!')
+    print(f'Bot is in {len(bot.guilds)} guilds')
 
-    print(
-        f"Logged in as {bot.user} "
-        f"({bot.user.id})"
-    )
+async def load_extensions():
+    """Load all cogs"""
+    try:
+        # Load the executor checker cog - CHANGE THIS LINE
+        await bot.load_extension('cogs.executor_checker')
+        print("✅ Loaded executor_checker cog")
+    except Exception as e:
+        print(f"❌ Failed to load executor_checker: {e}")
 
-    print(
-        f"Guilds: {len(bot.guilds)}"
-    )
+async def main():
+    async with bot:
+        await load_extensions()
+        await bot.start(TOKEN)
 
-
-@bot.tree.error
-async def on_app_command_error(
-    interaction,
-    error
-):
-
-    if isinstance(
-        error,
-        discord.app_commands.errors.MissingPermissions
-    ):
-
-        message = (
-            "You do not have permission "
-            "to use this command."
-        )
-
-    else:
-
-        message = "Something went wrong."
-
-        print(
-            f"[ERROR] {repr(error)}"
-        )
-
-    if interaction.response.is_done():
-
-        await interaction.followup.send(
-            message,
-            ephemeral=True
-        )
-
-    else:
-
-        await interaction.response.send_message(
-            message,
-            ephemeral=True
-        )
-
-
-bot.run(TOKEN)
+if __name__ == '__main__':
+    asyncio.run(main())
