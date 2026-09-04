@@ -6,7 +6,14 @@ CONFIG_PATH = "data/config.json"
 
 DEFAULT_CONFIG = {
     "verify_role_id": None,
-    "log_channel_id": None
+    "log_channel_id": None,
+
+    # Executor updater
+    "executor_update_channel_id": None,
+    "executor_update_role_id": None,
+
+    # Executor states
+    "executor_states": {}
 }
 
 
@@ -19,9 +26,11 @@ def load_config():
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
+
     except (OSError, json.JSONDecodeError):
         data = DEFAULT_CONFIG.copy()
 
+    # Add newly introduced settings to old configs
     for key, value in DEFAULT_CONFIG.items():
         data.setdefault(key, value)
 
@@ -30,5 +39,10 @@ def load_config():
 
 def save_config(data):
     os.makedirs("data", exist_ok=True)
+
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+        json.dump(
+            data,
+            f,
+            indent=4
+        )
