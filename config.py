@@ -11,8 +11,31 @@ DEFAULT_CONFIG = {
     # Executor updater
     "executor_update_channel_id": None,
     "executor_update_role_id": None,
+    
+    # Executor checker specific settings
+    "executor_check": {
+        "enabled": True,
+        "check_interval_hours": 1,
+        "executors_to_check": [
+            "Potassium", "SirHurt", "Cosmic", "Real", "Solara", 
+            "Wave", "Volt", "Velocity", "Volcano", "Synapse Z",
+            "Xeno", "Seliware", "Madium", "Isaeva",  # Windows Internal
+            "Photon", "Matrix Hub", "Ronin", "DX9WARE V2", 
+            "Serotonin", "Lumen", "Matcha", "Severe", "Axis",  # Windows External
+            "Opiumware", "MacSploit",  # Mac
+            "Codex", "Delta", "Vega X",  # Android
+            "Delta"  # iOS (will be differentiated by platform)
+        ],
+        "platform_groups": {
+            "windows_internal": ["Potassium", "SirHurt", "Cosmic", "Real", "Solara", "Wave", "Volt", "Velocity", "Volcano", "Synapse Z", "Xeno", "Seliware", "Madium", "Isaeva"],
+            "windows_external": ["Photon", "Matrix Hub", "Ronin", "DX9WARE V2", "Serotonin", "Lumen", "Matcha", "Severe", "Axis"],
+            "mac": ["Opiumware", "MacSploit"],
+            "android": ["Codex", "Delta", "Vega X"],
+            "ios": ["Delta"]
+        }
+    },
 
-    # Executor states
+    # Executor states (for tracking changes)
     "executor_states": {}
 }
 
@@ -32,7 +55,12 @@ def load_config():
 
     # Add newly introduced settings to old configs
     for key, value in DEFAULT_CONFIG.items():
-        data.setdefault(key, value)
+        if key not in data:
+            data[key] = value
+        elif isinstance(value, dict) and isinstance(data[key], dict):
+            # Deep merge for nested dicts
+            for sub_key, sub_value in value.items():
+                data[key].setdefault(sub_key, sub_value)
 
     return data
 
