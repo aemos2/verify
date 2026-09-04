@@ -3,80 +3,21 @@ from discord.ext import commands, tasks
 import requests
 import json
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
+from config import load_config, save_config
 
 class ExecutorChecker(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.config = load_config()
         
-        # --- All Executors from the API ---
-        # Windows Executors (Internal)
-        self.windows_internal_executors = [
-            "Potassium",
-            "SirHurt",
-            "Cosmic",
-            "Real",
-            "Solara",
-            "Wave",
-            "Volt",
-            "Velocity",
-            "Volcano",
-            "Synapse Z",
-            "Xeno",
-            "Seliware",
-            "Madium",
-            "Isaeva"
-        ]
-        
-        # Windows External Executors
-        self.windows_external_executors = [
-            "Photon",
-            "Matrix Hub",
-            "Ronin",
-            "DX9WARE V2",
-            "Serotonin",
-            "Lumen",
-            "Matcha",
-            "Severe",
-            "Axis"
-        ]
-        
-        # Mac Executors
-        self.mac_executors = [
-            "Opiumware",
-            "MacSploit"
-        ]
-        
-        # Android Executors
-        self.android_executors = [
-            "Codex",
-            "Delta",  # Android version
-            "Vega X"
-        ]
-        
-        # iOS Executors
-        self.ios_executors = [
-            "Delta"  # iOS version (note: same name as Android, but different platform)
-        ]
-        
-        # Private/Hidden Executors (still available but hidden in list)
-        self.hidden_executors = [
-            "Melatonin"
-        ]
-        
-        # Combine all executors into one list (removing duplicates)
-        self.all_executors = list(set(
-            self.windows_internal_executors + 
-            self.windows_external_executors + 
-            self.mac_executors + 
-            self.android_executors + 
-            self.ios_executors + 
-            self.hidden_executors
-        ))
-        
-        # Default check list (you can change this to check specific ones)
-        self.executors_to_check = self.all_executors
+        # Load settings from config
+        self.executor_config = self.config.get("executor_check", {})
+        self.enabled = self.executor_config.get("enabled", True)
+        self.check_interval = self.executor_config.get("check_interval_hours", 1)
+        self.executors_to_check = self.executor_config.get("executors_to_check", [])
+        self.platform_groups = self.executor_config.get("platform_groups", {})
         
         # API configuration
         self.api_base_url = "https://weao.xyz/api/status/exploits"
@@ -84,8 +25,12 @@ class ExecutorChecker(commands.Cog):
         self.last_known_rbx_version = None
         self.status_cache = {}
         
-        # Start the background task to check for updates every hour
-        self.check_updates.start()
+        # Start the background task if enabled
+        if self.enabled:
+            self.check_updates.start()
+            logging.info("Executor checker enabled and running")
+        else:
+            logging.info("Executor checker is disabled in config")
     
     def cog_unload(self):
         self.check_updates.cancel()
@@ -93,6 +38,9 @@ class ExecutorChecker(commands.Cog):
     @tasks.loop(hours=1)
     async def check_updates(self):
         """Background task to check for Roblox updates and executor status changes"""
+        if not self.enabled:
+            return
+        
         try:
             logging.info("Running scheduled executor status check...")
             await self.check_executor_status(notify_on_change=True)
@@ -232,19 +180,32 @@ class ExecutorChecker(commands.Cog):
         
         return summary
     
+    def get_channel(self):
+        """Get the notification channel from config"""
+        channel_id = self.config.get("executor_update_channel_id")
+        if channel_id:
+            return self.bot.get_channel(channel_id)
+        return None
+    
+    def get_role(self):
+        """Get the notification role from config"""
+        role_id = self.config.get("executor_update_role_id")
+        if role_id:
+            return role_id
+        return None
+    
     async def send_roblox_update_notification(self, current_version, past_version):
         """Send a notification when Roblox updates"""
-        notification_channel_id = getattr(self.bot, 'executor_log_channel', None)
-        if not notification_channel_id:
-            return
-        
-        channel = self.bot.get_channel(notification_channel_id)
+        channel = self.get_channel()
         if not channel:
             return
         
+        role = self.get_role()
+        mention = f"<@&{role}> " if role else ""
+        
         embed = discord.Embed(
             title="🚨 Roblox Update Detected!",
-            description=f"All executors need to be checked for compatibility.",
+            description=f"{mention}All executors need to be checked for compatibility.",
             color=discord.Color.red(),
             timestamp=datetime.utcnow()
         )
@@ -263,15 +224,11 @@ class ExecutorChecker(commands.Cog):
         
         embed.set_footer(text="Checking executor compatibility...")
         
-        await channel.send(embed=embed)
+        await channel.send(content=mention if role else None, embed=embed)
     
     async def send_status_change_notification(self, executor_name, new_status, old_status):
         """Send a notification when an executor's status changes"""
-        notification_channel_id = getattr(self.bot, 'executor_log_channel', None)
-        if not notification_channel_id:
-            return
-        
-        channel = self.bot.get_channel(notification_channel_id)
+        channel = self.get_channel()
         if not channel:
             return
         
@@ -362,7 +319,7 @@ class ExecutorChecker(commands.Cog):
                 
                 # Try to find the executor with proper capitalization
                 found_executor = None
-                for exe in self.all_executors:
+                for exe in self.executors_to_check:
                     if exe.lower() == executor_name.lower():
                         found_executor = exe
                         break
@@ -451,21 +408,18 @@ class ExecutorChecker(commands.Cog):
                 color=discord.Color.blue()
             )
             
-            # Group executors by platform
-            platforms = {
-                'Windows Internal': self.windows_internal_executors,
-                'Windows External': self.windows_external_executors,
-                'Mac': self.mac_executors,
-                'Android': self.android_executors,
-                'iOS': self.ios_executors
-            }
-            
-            for platform_name, executor_list in platforms.items():
+            # Group executors by platform using config
+            for platform_name, executor_list in self.platform_groups.items():
                 if not executor_list:
                     continue
                     
                 platform_status = []
                 for executor in executor_list:
+                    # Handle duplicate executor names (like Delta on Android and iOS)
+                    # We'll check if it exists in our main list
+                    if executor not in self.executors_to_check:
+                        continue
+                    
                     status = await self.get_executor_compatibility(executor, current_rbx_ver, past_rbx_ver)
                     if status:
                         status_emoji = "✅" if status['is_compatible'] else "❌" if status['needs_update'] else "❓"
@@ -473,8 +427,9 @@ class ExecutorChecker(commands.Cog):
                         platform_status.append(f"{status_emoji} {executor} (v{status['version']})")
                 
                 if platform_status:
+                    display_name = platform_name.replace('_', ' ').title()
                     embed.add_field(
-                        name=f"📱 {platform_name} ({len(platform_status)})",
+                        name=f"📱 {display_name} ({len(platform_status)})",
                         value="\n".join(platform_status[:10]) + ("..." if len(platform_status) > 10 else ""),
                         inline=False
                     )
@@ -485,7 +440,7 @@ class ExecutorChecker(commands.Cog):
     async def list_executors_command(self, ctx, platform: str = None):
         """List all available executors, optionally filtered by platform
         Usage: !listexecutors [platform]
-        Platforms: windows, windows_internal, windows_external, mac, android, ios"""
+        Platforms: windows_internal, windows_external, mac, android, ios"""
         
         embed = discord.Embed(
             title="📋 Available Executors",
@@ -493,50 +448,33 @@ class ExecutorChecker(commands.Cog):
         )
         
         if not platform:
-            # Show all
-            embed.add_field(
-                name="Windows Internal",
-                value=", ".join(self.windows_internal_executors[:15]) + ("..." if len(self.windows_internal_executors) > 15 else ""),
-                inline=False
-            )
-            embed.add_field(
-                name="Windows External",
-                value=", ".join(self.windows_external_executors[:15]) + ("..." if len(self.windows_external_executors) > 15 else ""),
-                inline=False
-            )
-            embed.add_field(
-                name="Mac",
-                value=", ".join(self.mac_executors),
-                inline=False
-            )
-            embed.add_field(
-                name="Android",
-                value=", ".join(self.android_executors),
-                inline=False
-            )
-            embed.add_field(
-                name="iOS",
-                value=", ".join(self.ios_executors),
-                inline=False
-            )
+            # Show all platforms from config
+            total = 0
+            for platform_name, executor_list in self.platform_groups.items():
+                if executor_list:
+                    display_name = platform_name.replace('_', ' ').title()
+                    embed.add_field(
+                        name=f"{display_name} ({len(executor_list)})",
+                        value=", ".join(executor_list[:15]) + ("..." if len(executor_list) > 15 else ""),
+                        inline=False
+                    )
+                    total += len(executor_list)
+            embed.set_footer(text=f"Total Executors: {total}")
         else:
             # Filter by platform
             platform_lower = platform.lower()
-            if platform_lower in ['windows', 'windows_internal']:
-                embed.add_field(name="Windows Internal", value=", ".join(self.windows_internal_executors), inline=False)
-            elif platform_lower in ['windows_external', 'external']:
-                embed.add_field(name="Windows External", value=", ".join(self.windows_external_executors), inline=False)
-            elif platform_lower in ['mac', 'macos']:
-                embed.add_field(name="Mac", value=", ".join(self.mac_executors), inline=False)
-            elif platform_lower in ['android']:
-                embed.add_field(name="Android", value=", ".join(self.android_executors), inline=False)
-            elif platform_lower in ['ios', 'iphone']:
-                embed.add_field(name="iOS", value=", ".join(self.ios_executors), inline=False)
+            if platform_lower in self.platform_groups:
+                executor_list = self.platform_groups[platform_lower]
+                display_name = platform_lower.replace('_', ' ').title()
+                embed.add_field(
+                    name=f"{display_name} ({len(executor_list)})",
+                    value=", ".join(executor_list),
+                    inline=False
+                )
             else:
-                await ctx.send("❌ Invalid platform. Options: windows, windows_external, mac, android, ios")
+                await ctx.send(f"❌ Invalid platform. Options: {', '.join(self.platform_groups.keys())}")
                 return
         
-        embed.set_footer(text=f"Total Executors: {len(self.all_executors)}")
         await ctx.send(embed=embed)
     
     @commands.command(name='checkplatform')
@@ -545,20 +483,12 @@ class ExecutorChecker(commands.Cog):
         Usage: !checkplatform windows_internal
         Options: windows_internal, windows_external, mac, android, ios"""
         
-        platform_map = {
-            'windows_internal': self.windows_internal_executors,
-            'windows_external': self.windows_external_executors,
-            'mac': self.mac_executors,
-            'android': self.android_executors,
-            'ios': self.ios_executors
-        }
-        
         platform_lower = platform.lower()
-        if platform_lower not in platform_map:
-            await ctx.send(f"❌ Invalid platform. Options: {', '.join(platform_map.keys())}")
+        if platform_lower not in self.platform_groups:
+            await ctx.send(f"❌ Invalid platform. Options: {', '.join(self.platform_groups.keys())}")
             return
         
-        executors_to_check = platform_map[platform_lower]
+        executors_to_check = self.platform_groups[platform_lower]
         if not executors_to_check:
             await ctx.send(f"❌ No executors found for platform: {platform}")
             return
@@ -569,8 +499,9 @@ class ExecutorChecker(commands.Cog):
                 await ctx.send("❌ Could not retrieve Roblox version data.")
                 return
             
+            display_name = platform_lower.replace('_', ' ').title()
             embed = discord.Embed(
-                title=f"📱 {platform.replace('_', ' ').title()} Executor Status",
+                title=f"📱 {display_name} Executor Status",
                 description=f"Roblox Version: `{current_rbx_ver}`",
                 color=discord.Color.blue()
             )
@@ -580,6 +511,9 @@ class ExecutorChecker(commands.Cog):
             unknown = []
             
             for executor in executors_to_check:
+                if executor not in self.executors_to_check:
+                    continue
+                    
                 status = await self.get_executor_compatibility(executor, current_rbx_ver, past_rbx_ver)
                 if status:
                     if status['is_compatible']:
@@ -597,6 +531,30 @@ class ExecutorChecker(commands.Cog):
                 embed.add_field(name=f"❓ Unknown Status ({len(unknown)})", value="\n".join(unknown[:10]) + ("..." if len(unknown) > 10 else ""), inline=False)
             
             await ctx.send(embed=embed)
+    
+    @commands.command(name='setexecutorchannel')
+    @commands.has_permissions(administrator=True)
+    async def set_executor_channel(self, ctx, channel: discord.TextChannel = None):
+        """Set the channel for executor update notifications
+        Usage: !setexecutorchannel #channel"""
+        if not channel:
+            channel = ctx.channel
+        
+        self.config["executor_update_channel_id"] = channel.id
+        save_config(self.config)
+        await ctx.send(f"✅ Executor update channel set to {channel.mention}")
+    
+    @commands.command(name='setexecutorrole')
+    @commands.has_permissions(administrator=True)
+    async def set_executor_role(self, ctx, role: discord.Role = None):
+        """Set the role to mention for executor update notifications
+        Usage: !setexecutorrole @role"""
+        if not role:
+            role = None
+        
+        self.config["executor_update_role_id"] = role.id if role else None
+        save_config(self.config)
+        await ctx.send(f"✅ Executor update role set to {role.mention if role else 'None'}")
 
 async def setup(bot):
     await bot.add_cog(ExecutorChecker(bot))
